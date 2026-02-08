@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AgentPlan, ReviewStep, StepStatus } from '../types';
-import { CheckCircle, Circle, Loader2, PlayCircle, Lock, ArrowRight, AlertCircle, Target, RefreshCw, Plus, Trash2, X, Check, UserCheck } from 'lucide-react';
+import { CheckCircle, Circle, Loader2, PlayCircle, Lock, ArrowRight, AlertCircle, Target, RefreshCw, Plus, Trash2, X, Check, UserCheck, Zap } from 'lucide-react';
 
 interface PlanOverviewProps {
   plan: AgentPlan | null;
@@ -8,7 +8,9 @@ interface PlanOverviewProps {
   onNewIteration: () => void;
   onAddStep: (name: string, description: string) => void;
   onDeleteStep: (stepId: string) => void;
+  onAutoRun: () => void;
   isProcessing: boolean;
+  isAutoRunning: boolean;
   activeStepId: string | null;
 }
 
@@ -18,7 +20,9 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
   onNewIteration, 
   onAddStep,
   onDeleteStep,
-  isProcessing, 
+  onAutoRun,
+  isProcessing,
+  isAutoRunning,
   activeStepId 
 }) => {
   const [isAdding, setIsAdding] = useState(false);
@@ -45,7 +49,7 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
       case StepStatus.PENDING:
         return <Circle className="w-5 h-5 text-slate-300" />;
       case StepStatus.FAILED:
-        return <div className="w-5 h-5 rounded-full bg-red-100 text-red-500 flex items-center justify-center">!</div>;
+        return <div className="w-5 h-5 rounded-full bg-red-100 text-red-500 flex items-center justify-center font-bold text-xs">!</div>;
       default:
         return <Circle className="w-5 h-5 text-slate-300" />;
     }
@@ -54,6 +58,7 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
   const completedSteps = plan.steps.filter(s => s.status === StepStatus.COMPLETED).length;
   const totalSteps = plan.steps.length;
   const progress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+  const hasPendingSteps = plan.steps.some(s => s.status === StepStatus.PENDING);
 
   return (
     <div className="h-full flex flex-col bg-white border-r border-slate-200 w-96 shrink-0 overflow-hidden">
@@ -117,19 +122,43 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
                 </p>
              </div>
           </div>
-          
-          <p className="text-xs text-slate-400 italic">
-            "{plan.analysis.summary}"
-          </p>
         </div>
       </div>
 
       {/* Plan Steps */}
       <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
-        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 sticky top-0 bg-white z-20 py-1 flex justify-between items-center">
-          <span>执行优化计划</span>
-          <span className="text-xs font-normal text-slate-500">{progress}%</span>
-        </h3>
+        <div className="sticky top-0 bg-white z-20 pb-4">
+            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex justify-between items-center">
+                <span>执行优化计划</span>
+                <span className="text-xs font-normal text-slate-500">{progress}%</span>
+            </h3>
+            
+            {/* Auto Run Button */}
+            {hasPendingSteps && (
+                <button
+                    onClick={onAutoRun}
+                    disabled={isProcessing}
+                    className={`w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
+                        isAutoRunning 
+                        ? 'bg-blue-100 text-blue-700 cursor-wait' 
+                        : 'bg-slate-900 hover:bg-slate-800 text-white shadow-md hover:shadow-lg'
+                    }`}
+                >
+                    {isAutoRunning ? (
+                        <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Agent 自动执行中...
+                        </>
+                    ) : (
+                        <>
+                            <Zap className="w-4 h-4 fill-current" />
+                            一键自动执行 Agent 优化
+                        </>
+                    )}
+                </button>
+            )}
+        </div>
+
         <div className="space-y-4 relative pb-4">
           {/* Vertical line connector */}
           <div className="absolute left-2.5 top-2 bottom-4 w-px bg-slate-200" />
@@ -137,6 +166,7 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
           {plan.steps.map((step, index) => {
             const isActive = activeStepId === step.id;
             const isPending = step.status === StepStatus.PENDING;
+            // Only show "run step" button if manual mode is possible (not auto running) and sequential order
             const isNext = isPending && !activeStepId && !isProcessing && (index === 0 || plan.steps[index - 1].status === StepStatus.COMPLETED);
             const canDelete = step.status === StepStatus.PENDING;
 
@@ -176,25 +206,25 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
                     </button>
                   )}
                   
-                  {isNext && (
+                  {isNext && !isAutoRunning && (
                     <button
                       onClick={() => onStartStep(step.id)}
-                      className="mt-2 w-full flex items-center justify-center gap-2 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium rounded transition-colors"
+                      className="mt-2 w-full flex items-center justify-center gap-2 py-1.5 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 text-xs font-medium rounded transition-colors"
                     >
                       <PlayCircle className="w-3 h-3" />
-                      执行步骤
+                      单步执行
                     </button>
                   )}
                   
                   {isActive && isProcessing && (
                     <div className="mt-2 flex items-center gap-2 text-xs text-accent font-medium animate-pulse">
                       <Loader2 className="w-3 h-3 animate-spin" />
-                      正在扩展逻辑与内容...
+                      {isAutoRunning ? 'Agent 正在自主优化...' : '正在扩展逻辑与内容...'}
                     </div>
                   )}
 
                   {step.status === StepStatus.COMPLETED && step.diffSummary && (
-                    <div className="mt-2 text-xs bg-green-50 text-green-700 p-2 rounded border border-green-100">
+                    <div className="mt-2 text-xs bg-green-50 text-green-700 p-2 rounded border border-green-100 animate-in fade-in slide-in-from-top-1">
                       <strong>优化内容：</strong> {step.diffSummary}
                     </div>
                   )}
@@ -236,7 +266,7 @@ export const PlanOverview: React.FC<PlanOverviewProps> = ({
                 </button>
               </div>
             </div>
-          ) : (
+          ) : !isAutoRunning && (
             <button 
               onClick={() => setIsAdding(true)}
               className="ml-8 flex items-center gap-1.5 text-xs text-slate-400 hover:text-accent hover:bg-blue-50 px-3 py-2 rounded-lg border border-dashed border-slate-300 hover:border-accent transition-all w-[calc(100%-2rem)] justify-center"

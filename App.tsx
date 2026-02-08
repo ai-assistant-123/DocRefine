@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, Sparkles, Layout, Settings } from 'lucide-react';
+import { Bot, Sparkles, Layout, Settings, X, AlertCircle } from 'lucide-react';
 import { InputSection } from './components/InputSection';
 import { PlanOverview } from './components/PlanOverview';
 import { ComparisonView } from './components/ComparisonView';
@@ -23,6 +23,7 @@ function App() {
   const [plan, setPlan] = useState<AgentPlan | null>(null);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Config State
@@ -143,16 +144,19 @@ function App() {
     setIsProcessing(true);
     setError(null);
 
-    // Update status to In Progress
-    const updatedPlan = { ...plan };
-    updatedPlan.steps[stepIndex].status = StepStatus.IN_PROGRESS;
-    setPlan(updatedPlan);
+    // Update status to In Progress (Immutable way)
+    setPlan(prev => {
+        if (!prev) return null;
+        const newSteps = [...prev.steps];
+        newSteps[stepIndex] = { ...newSteps[stepIndex], status: StepStatus.IN_PROGRESS };
+        return { ...prev, steps: newSteps };
+    });
 
     try {
       const result = await executeStep(
         docState.currentText, 
-        updatedPlan.steps[stepIndex], 
-        updatedPlan.analysis,
+        plan.steps[stepIndex], 
+        plan.analysis,
         config
       );
 
@@ -164,18 +168,109 @@ function App() {
       }));
 
       // Update step status and info
-      updatedPlan.steps[stepIndex].status = StepStatus.COMPLETED;
-      updatedPlan.steps[stepIndex].output = result.revisedText;
-      updatedPlan.steps[stepIndex].diffSummary = result.diffSummary;
-      setPlan(updatedPlan);
+      setPlan(prev => {
+        if (!prev) return null;
+        const newSteps = [...prev.steps];
+        newSteps[stepIndex] = {
+            ...newSteps[stepIndex],
+            status: StepStatus.COMPLETED,
+            output: result.revisedText,
+            diffSummary: result.diffSummary
+        };
+        return { ...prev, steps: newSteps };
+      });
 
     } catch (err: any) {
       setError(err.message || `步骤执行失败: ${plan.steps[stepIndex].name}`);
-      updatedPlan.steps[stepIndex].status = StepStatus.FAILED;
-      setPlan(updatedPlan);
+      setPlan(prev => {
+        if (!prev) return null;
+        const newSteps = [...prev.steps];
+        newSteps[stepIndex] = { ...newSteps[stepIndex], status: StepStatus.FAILED };
+        return { ...prev, steps: newSteps };
+      });
     } finally {
       setIsProcessing(false);
       setActiveStepId(null);
+    }
+  };
+
+  const handleAutoRun = async () => {
+    if (!plan || isProcessing) return;
+    if (!config.apiKey) {
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setIsProcessing(true);
+    setIsAutoRunning(true);
+    setError(null);
+
+    // Maintain local references for the chain execution
+    let currentText = docState.currentText;
+    let currentSteps = [...plan.steps];
+
+    try {
+      for (let i = 0; i < currentSteps.length; i++) {
+        const step = currentSteps[i];
+        if (step.status === StepStatus.PENDING) {
+            setActiveStepId(step.id);
+            
+            // Mark start in UI
+            const runningSteps = [...currentSteps];
+            runningSteps[i] = { ...step, status: StepStatus.IN_PROGRESS };
+            setPlan(prev => prev ? ({ ...prev, steps: runningSteps }) : null);
+
+            // Execute using the LATEST text
+            const result = await executeStep(
+                currentText,
+                runningSteps[i],
+                plan.analysis,
+                config
+            );
+
+            // Update local chain variables
+            currentText = result.revisedText;
+
+            // Mark complete in UI
+            const completedSteps = [...runningSteps];
+            completedSteps[i] = {
+                ...runningSteps[i],
+                status: StepStatus.COMPLETED,
+                output: result.revisedText,
+                diffSummary: result.diffSummary
+            };
+            currentSteps = completedSteps; // Sync local steps
+            
+            // Sync React State
+            setPlan(prev => prev ? ({ ...prev, steps: completedSteps }) : null);
+            setDocState(prev => ({
+                ...prev,
+                currentText: result.revisedText,
+                version: prev.version + 1
+            }));
+            
+            // Small pause for visual flow
+            await new Promise(resolve => setTimeout(resolve, 800));
+        }
+      }
+    } catch (err: any) {
+        setError(err.message || "自动执行被中断或发生错误");
+        // Mark current as failed if active
+        if (activeStepId) {
+             setPlan(prev => {
+                 if (!prev) return null;
+                 const newSteps = [...prev.steps];
+                 const idx = newSteps.findIndex(s => s.id === activeStepId);
+                 if (idx !== -1) {
+                     newSteps[idx] = { ...newSteps[idx], status: StepStatus.FAILED };
+                 }
+                 return { ...prev, steps: newSteps };
+             });
+        }
+    } finally {
+        setIsProcessing(false);
+        setIsAutoRunning(false);
+        setActiveStepId(null);
     }
   };
 
@@ -198,7 +293,7 @@ function App() {
             DocRefine AI
           </h1>
           <span className="px-2 py-0.5 rounded bg-slate-100 text-xs font-medium text-slate-500 border border-slate-200">
-            Preview
+            Agent
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -209,6 +304,7 @@ function App() {
                  setDocState({ originalText: '', currentText: '', version: 0 });
                }}
                className="text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors mr-2"
+               disabled={isProcessing}
              >
                新建项目
              </button>
@@ -234,10 +330,23 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden relative">
-        {/* Error Banner */}
+        {/* Error Banner - Fixed Position */}
         {error && (
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-50 text-red-600 px-6 py-3 rounded-lg shadow-lg border border-red-100 flex items-center gap-2 animate-bounce">
-             <span>⚠️</span> {error}
+          <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-[100] max-w-md w-full px-4 animate-in slide-in-from-top-4 fade-in duration-300">
+            <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg shadow-xl border border-red-200 flex items-start gap-3">
+               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-red-500" />
+               <div className="flex-1">
+                 <h3 className="text-sm font-bold mb-0.5">出错了</h3>
+                 <p className="text-sm opacity-90 leading-relaxed">{error}</p>
+               </div>
+               <button 
+                 onClick={() => setError(null)}
+                 className="p-1.5 hover:bg-red-100 text-red-400 hover:text-red-700 rounded-lg transition-colors -mr-1 -mt-1"
+                 title="关闭提示"
+               >
+                 <X className="w-4 h-4" />
+               </button>
+            </div>
           </div>
         )}
 
@@ -272,7 +381,9 @@ function App() {
               onNewIteration={handleNewIteration}
               onAddStep={handleAddStep}
               onDeleteStep={handleDeleteStep}
+              onAutoRun={handleAutoRun}
               isProcessing={isProcessing}
+              isAutoRunning={isAutoRunning}
               activeStepId={activeStepId}
             />
 
